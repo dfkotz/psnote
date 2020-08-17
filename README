@@ -1,0 +1,35 @@
+# psnote
+## AUTHOR: Darren Vengroff
+
+## ABOUT:
+
+psnote is a tool for annotating PS files with text and/or graphics.
+It is useful for noting such things as what conference proceedings or
+journal a paper appeared in, where it is available on the web, and
+who holds the copyright.  It can also be used to place watermarks or
+letterhead underneath the text of a document before printing.
+
+psnote is a perl script, so you need a system that has perl to run it.
+psnote is not 100% foolproof.  It relies heavily on correctly
+constructed structuring comments in the PS source it works with.
+
+psnote was written by Darren Erik Vengroff <dev@cs.duke.edu>, to whom
+questions and/or bug reports should be addressed.
+
+## INSTALLATION INSTRUCTIONS:
+
+Installing psnote is quite simple.
+
+First, edit the executable script psnote.  The only thing you should
+have to change is the very first line, which should point to where
+perl is installed on your system.
+
+Now copy psnote to a convenient place on your path, such as
+/usr/local/bin/ or ~/bin/.  Copy psnote.1 to a directory called man1/
+in a directory on your MANPATH, such as /usr/local/man/ or ~/man/.
+
+That's it.  You are now ready to use psnote.  The only other thing you
+might have to do is rehash, so you're shell knows where to find
+psnote.
+
+- dev 14 Apr, 1995

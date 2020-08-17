@@ -1,0 +1,199 @@
+.\"
+.\" psnote.1 - Man page for psnote.
+.\"
+.\" Copyright (c) 1995 Darren Erik Vengroff <dev@cs.duke.edu>
+.\" 
+.\" $Id: psnote.1,v 1.5 1995/04/14 21:47:00 darrenv Exp $
+.\"
+.TH psnote 1
+.AT 3
+.SH NAME
+psnote \- Annotate PS files.
+.SH SYNOPSIS
+.B psnote [ -U ] 
+.B [ -o outfile ] 
+.B [ commands ] 
+.B [ psfile ]
+.SH DESCRIPTION
+.I psnote 
+annotates PS files by placing one or more notes consisting of either text 
+encapsulated PS files on the first page or all pages of the document.
+Additional PS code to place the notes is inserted into the input code,
+and the results are written either to standard output or a specified
+output file.  If
+.B psfile
+is not specified, the standard input is read.
+.SH OPTIONS
+.TP
+.B \-U
+Undo!  This option removes all annotations made by previous
+invocations of 
+.I psnote.
+This is useful if you want to get rid of incorrect or outdated
+notes in a PS file.  It can be combined with note making commands to 
+replace notes currently in a PS file with new notes.
+.TP
+.B \-o outfile
+Write the output to the file specified, instead of the standard
+output.
+.SH COMMANDS
+Unlike options, which apply globally, commands are processed in the
+order they appear on the command line, from left to right.
+There are two kinds of commands, setup commands and note-making
+commands.  Setup commands set size, location, font, and
+page parameters that apply to subsequent note-making commands.
+Parameters set by a given setup command can be changed later on the
+command line.  Any note-making commands between to two setup commands
+will rely on the parameter value set by the first setup command.  Any
+note-making commands after the second setup command will use the
+parameter value it sets.
+
+The setup commands are as follows:
+.TP
+.B \-Yt | \-Yc | \-Yb  
+Specifies whether to place subsequent notes at the top, center, or
+bottom of the page.  The top of the page is the default.
+.TP
+.B \-Xl | \-Xc | \-Xr 
+Specifies whether to place subsequent notes at the left, center, or
+right of the page.  Left is the default.
+.TP
+.B -x xoff
+Specifies the x offset for subsequent notes.  The default is 36
+points.  If
+.B \-Xl
+was specified, it is the distance from the left of the page.  
+If 
+.B \-Xr
+was specified, it is the distance from the right of the page.  
+If
+.B \-Xc
+was specified, then
+.B \-x
+has no effect.  
+
+.B xoff
+can either be a unit-less number, in which case points are assumed to
+be the unit, or a number followed by a unit, with no space separating
+them.  Valid units are 
+.B pt
+(points),
+.B in
+(inches),
+.B cm
+(centimeters), and
+.B mm
+(millimeters).  Thus, for example, 
+.B \-x 2.5cm 
+would specify an offset of 2.5 centimeters.
+.TP
+.B \-y 
+Similar to 
+.B \-x
+except that the distance from the top or bottom of the page is
+specified.  The default is 36 points.
+.TP
+.B \-a
+Place subsequent notes on every page, not just the first.
+.TP
+.B \-t
+Place subsequent notes only on the first page.
+.TP
+.B \-F font | \-F fontSIZE
+Specifies the PS font to use for subsequent notes.  The default is
+Courier.  If a string consisting of a font name followed by a size is
+specified, as in
+.B \-F Helvetica12
+then the size is set as well, eliminating the need for explicit use of
+the 
+.B \-S
+option.
+.TP
+.B \-S size
+The size, in points, of the font to be used for subsequent notes.  The
+default is 11.
+.TP 
+.B \-s spacing
+The line spacing between lines for notes taken from files using the
+.B \-N
+note making command.  This is relative to the font size.  The default
+is 1.2.
+
+The note making commands are as follows:
+
+.TP
+.B \-n note
+Specifies the text of the note.
+.TP
+.B \-N notefile
+Specifies the name of a file from which to take the note.  The file
+can have multiple lines, which will be formatted as such.
+.TP
+.B \-E epsf-file
+Specifies an encapsulated PS file to be placed in the output instead
+of a text note as when
+.B \-n
+or 
+.B \-N
+are specified.  This is useful for placing letterhead graphics just
+before spooling to a printer, or placing a watermark image under the
+text of a document.  One might also use it with an appropriate file to
+print DRAFT in large grey letters behind the text of a document.
+
+.SH EXAMPLES
+The following places a copyright notice taken from a file at the
+bottom left of the first page.
+
+.I psnote -Xb -N copyright.txt
+.I -o foo_c.ps foo.ps 
+
+The following notes that a document is a draft and marks each page
+with the current date and time.
+
+.I psnote -a -Xt -Yc -F Helvetica18
+.I -n \*(lqDRAFT of `date`\*(rq 
+.I -o foo.draft.ps foo.ps 
+
+The following removes any existing notes, places the image contained in 
+.B bar.eps
+in the center of every page, and notes the URL where the file is
+available at the bottom of the first page.
+
+.I psnote -U -o foobar.ps 
+.I -Xc -Yc -a 
+.I -E bar.eps -Xl -Yb -t 
+.I -n 
+.I \*(lqURL: ftp://www.cs.foo.edu/ps/foobar.ps\*(rq foo.ps
+
+.SH FUTURE ENHANCEMENTS
+Check and environment variable 
+.B PSNOTEPATH
+for a list of directories to look for files when given the 
+.B -E
+or 
+.B -N 
+option.  This will allow for the maintenance of a library of standard
+note files.
+
+Allow notes to contain meta-characters that expand to certain
+interesting strings.  For example, 
+.B %f
+could be the current file and 
+.B %p
+could be the current page.
+.SH AUTHOR
+Darren Erik Vengroff <dev@cs.duke.edu>
+.SH BUGS
+.I psnote
+has not been extensively tested up to this point.
+
+This man page could be more extensive.
+
+Input documents must have structuring comments.  There is not much way
+around this.
+.SH ACKNOWLEDGEMENTS
+The author thanks David Kotz <dfk@cs.dartmouth.edu> for extensive
+testing and feedback.
+.SH COPYRIGHT
+Copyright (c) 1995 Darren Erik Vengroff <dev@cs.duke.edu>
+

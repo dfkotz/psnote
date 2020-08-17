@@ -1,0 +1,680 @@
+#!/usr/local/bin/perl
+#
+# $Id: psnote,v 1.15 1995/05/03 21:42:25 darrenv Exp darrenv $
+#
+# A tool to annotate PS documents.
+# Copyright (c) 1995 Darren Erik Vengroff.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# If you should need a copy of the GNU General Public License, 
+# write to the Free Software Foundation, Inc., 675 Mass Ave, 
+# Cambridge, MA 02139, USA.
+#
+
+#
+# Version info
+#
+
+$revision = ' $Revision: 1.15 $ '; 
+$revision =~ /([0-9]+\.[0-9]+)/; 
+$version = $1;
+$author = 'Darren Erik Vengroff <dev@cs.duke.edu>';
+
+#
+# How to use psnote.
+#
+
+$usage = 
+'Usage:
+    psnote [ -U ] [ -o outfile ] [ commands ] [ psfile ]
+
+Options are:
+
+-U 
+    Undo!  Get rid of annotations in the input due to a previous run.
+-o outfile
+    Name the output file.  If omitted, use stdout.    
+
+Setup commands, processed left to right, are:
+
+-Yt | -Yc | -Yb
+    Notes go at top, center, or bottom of page(s).
+-Xl | -Xc | -Xr
+    Notes go at left, center, or right of page(s).
+-x xoff
+    x offset of notes in points (pt) inches (in) or centimeters (cm).
+    e.g. -x 2.54cm
+-y yoff
+    y offset of notes.
+-a
+    All pages.  Place notes on every page.
+-t 
+    Title page.  Place notes only on the first page.
+-F font | -F fontSIZE
+    PS font to use for notes.  e.g. -F Helvetica or -F Courier10.
+-S size
+    Font size.
+-s spacing
+    line spacing.  The amount of space between subsequent lines in notes.
+    Relative to font size.  e.g. -s 1.5
+
+Note making commands, affected by setup commands to their left, are:
+
+-n note
+    Specifies the text of the note.
+-N notefile
+    Specifies the name of a file from which to take the note text. 
+-E epsf-file
+    Specifies an encapsulated PS file to be placed in the
+    output.
+
+';
+
+# 
+# Units, and the number of points in each.
+#
+				
+%units = (			
+	  'pt', 1,
+	  'in', 72,
+	  'mm', 2.83,
+	  'cm', 28.3,
+);
+
+
+# Process command line arguments to build a list of notes to attach.
+# Order or operands is important, since they are essentially a
+# sequence of commands, so none of the perl library option parsing
+# functions work for us.
+
+&buildCmdList();
+
+if ($debug) {
+    @cp_commands = @commands;
+    while(@cp_commands) {
+	print STDERR shift @cp_commands, "\n";
+    }
+}
+
+# Open the appropriate input file.
+
+if (defined($infile) && ($infile !~ /^-$/)) {
+    open(INFILE, '<' . $infile) || 
+	die "Can't open input file \"", $infile, "\"\n";
+    $input = INFILE;
+} else {
+    $input = STDIN;
+}
+
+# Sanity check.  Make sure input looks like a PS file.
+
+die "Input does not appear to be PS.\n" if ($line1 = <$input>) !~ /^%!/;
+print $line1;
+
+# Do we have any commands to execute?  We might just be undoing.
+
+$commands = 0+@commands;
+print STDERR "Warning, no note commands given.\n" if !($commands || $undo);
+
+# We are not currently in an old note that undo might have to get rid
+# of.
+
+$in_note = 0;
+
+# We have not seen any pages yet.
+
+$page = 0;
+
+# Read the input.  Pass each line through a series of filters until one
+# of them returns true, indicating that it took the line and it should 
+# not be passed on to the next filter.
+
+# A filter that takes a line and returns true is reponsible for either
+# printing the line or ensuring that it need not be printed.  
+
+# A filter can also modify the line it is passed but return false, to
+# indicate that the modified line should be passed on to additional 
+# filters.
+
+while (<$input>) {
+    if (!(($undo && filter_undo($_)) ||
+	  ($commands && filter_find_bb($_)) ||
+	  ($commands && filter_document_fonts($_)) ||
+	  ($commands && filter_bb_foundp($_)) ||
+	  ((!$undo || $commands) && filter_record_annotation($_)) ||
+	  ($commands && filter_commands($_)))) {
+	print;
+    }
+}
+
+# Close the output file if there is one.
+
+if (defined($output_file)) {
+    close(OUTFILE);
+}
+
+exit(0);
+
+#
+# A filter to locate and record the bounding box of the figure.
+#
+sub filter_find_bb {
+    local($line) = @_;
+
+    if ($line =~ /^%%BoundingBox\: +([0-9]+) +([0-9]+) +([0-9]+) +([0-9]+)/) {
+	$bbox{'left'} = $1;
+	$bbox{'bottom'} = $2;
+	$bbox{'right'} = $3;
+	$bbox{'top'} = $4;
+	$bbox_defined = 1;
+    }
+
+    0;
+}
+
+#
+# A filter to record any additional fonts used by any of the notes.
+#
+sub filter_document_fonts {
+    local($line) = @_;
+    local($ret, $old_fonts, @new_fonts);
+
+    $ret = 0;
+
+    if ($line =~ /^%%DocumentFonts\:(.*)$/) {
+	$old_fonts = $1;	
+	
+	foreach(@fonts_used) {
+	    if ($old_fonts !~ /\b($_)\b/) {
+		push(@new_fonts, $_);
+	    }
+	}
+	if ($ret = @new_fonts) {
+	    print '%% PSnote v', $version, ": Begin\n";
+	    print '%%psnoteCachedDocumentFonts:', $old_fonts, "\n";
+	    print '%%DocumentFonts:', $1, ' ';
+	    while (@new_fonts) {
+		print shift @new_fonts;
+		print ' ' if (@new_fonts);
+	    }
+	    print "\n%% PSnote v", $version, ": End\n";
+	}
+    }
+
+    $ret;
+}
+
+
+#
+# A filter to make sure a bounding box was found if we need one.
+#
+
+sub filter_bb_foundp {
+    local($line) = @_;
+
+    die "No bounding box found.\n" if (($line =~ /^%%EndComments/) && 
+				       !$bbox_defined);
+
+    0;
+};
+
+
+sub filter_record_annotation {
+    local($line) = @_;
+
+    if ($line =~ /^%%EndComments/) {
+	print '%%AnnotatedBy: PSnote v', $version, ' by ', $author, "\n";
+    }
+    
+    0;
+}
+
+
+#
+# A filter to remove lines that don't belong anymore because they are
+# being undone.
+#
+
+sub filter_undo {
+    ($line) = @_;
+    local($ret);
+
+    if ($line =~ /^%% PSnote.*\: Begin$/) {
+	$in_note = 1;
+	$ret = 1;
+    } elsif ($line =~ /^%% PSnote.*\: End$/) {
+	$in_note = 0;
+	$ret = 1;
+    } else {
+	if ($ret = $in_note) {
+	    if ($line =~ /^(%%)psnoteCached(DocumentFonts.*)/) {
+		# Modify the input and pass it on to the next filter.
+		$_[0] = $1 . $2 . "\n";
+		$ret = 0;
+	    } 
+	} else {
+	    $ret = 0 + ($line =~ /^%%AnnotatedBy: PSnote.*$/);		
+	}
+    }
+
+    $ret;
+}    
+
+
+# 
+# A filter to process commands and insert notes.
+#
+sub filter_commands {
+    local($line) = @_;
+    local($ret, @current_cmds);
+    local($lcr, $bmt, $font, $f_size, $note, $all_pages, $spacing, $cmd);
+
+    if ($ret = ($line =~ /^%%Page:/)) {
+	print $line;
+	@current_cmds = @commands;
+	while (@current_cmds) {
+	    $cmd = shift @current_cmds;
+	    if (($cmd eq 'string') ||
+		($cmd eq 'file') ||
+		($cmd eq 'epsf')) {
+		
+		# Get the parameters of the note.
+
+		($bmt, $lcr, $posx, $posy, $font, $f_size, $all_pages, 
+		 $spacing, $note) = splice(@current_cmds, 0, 9);
+
+		# Convert the positions from relative to absolute
+		# based on the bounding box.
+
+		if ($bmt eq 'c') {
+		    $posy = ($bbox{'bottom'} + $bbox{'top'}) / 2;
+		} elsif ($bmt eq 'b') {
+		    $posy = $bbox{'bottom'} + $posy;
+		} else {	# $bmt eq 't'
+		    $posy = $bbox{'top'} - $posy;
+		}
+
+		if ($lcr eq 'c') {
+		    $posx = ($bbox{'left'} + $bbox{'right'}) / 2;
+		} elsif ($lcr eq 'r') {
+		    $posx = $bbox{'right'} - $posx;    
+		} else {	# $lcr eq 'l'
+		    $posx = $bbox{'left'} + $posx;
+		}
+
+	    } else {
+		die "Unknown command in command list.\n";
+	    }
+	    if (!($page) || $all_pages) {
+		print '%% PSnote v', $version, ": Begin\n";
+		print "gsave\nmatrix defaultmatrix setmatrix\n";
+		if ($cmd eq 'string') {
+		    makestringnote($posx, $posy, $lcr, $bmt, $font, $f_size, 
+				   $note);
+		} elsif ($cmd eq 'file') {
+		    makefilenote($posx, $posy, $lcr, $bmt, $font, $f_size, 
+				 $spacing, $note);
+		} elsif ($cmd eq 'epsf') {
+		    makeimagenote($posx, $posy, $lcr, $bmt, $bbox, $note);
+		}
+		print "grestore\n";
+		print '%% PSnote v', $version, ": End\n";
+	    }
+	}
+
+	$page++;
+
+    } 
+
+    $ret;
+}
+
+
+# The subroutine to write a note string in PS format.
+
+sub makestringnote {
+    local($posx, $posy, $lcr, $bmt, $font, $f_size, $note) = @_;
+
+    print '/', $font, ' findfont ', $f_size, " scalefont setfont\n";
+    
+    if ($bmt eq 't') {
+	$posy -= $f_size;
+    } elsif ($bmt eq 'c') {
+	$posy -= $f_size / 2;
+    }
+
+    &printPSstring($posx, $posy, $lcr, $note);
+}
+
+
+# The subroutine to write the contents of a file to a note.
+
+sub makefilenote {
+    local($posx, $posy, $lcr, $bmt, $font, $f_size, $spacing, $file) = @_;
+    local($lines);
+
+    open(NOTEFILE, '<' . $file) ||
+	die "Can't open note file \"", $file, "\"\n";	
+
+    # Count the lines in the file.
+    $lines = 0;
+
+    while(<NOTEFILE>) {
+	$lines++;
+    }
+
+    # Adjust the initial y position based on the number of lines.
+
+    if ($bmt eq 'c') {
+	$posy += $f_size * $spacing * ($lines-1) / 2 - $f_size / 2;
+    } elsif ($bmt eq 'b') {
+	$posy += $f_size * $spacing * ($lines-1);
+    } else {			# $bmt eq 't'
+	$posy -= $f_size;
+    }
+
+    print '/', $font, ' findfont ', $f_size, " scalefont setfont\n";
+
+    # Write the lines
+
+    seek(NOTEFILE, 0, 0);
+    while(<NOTEFILE>) {
+	&printPSstring($posx, $posy, $lcr, $_);
+	$posy -= $f_size * $spacing;
+    }
+
+}
+
+
+sub printPSstring {
+    local($posx, $posy, $lcr, $string) = @_;
+
+    print $posx, ' ', $posy, " moveto\n";
+    print '(', $string, ') ' ;
+    # Set up the x offset based on the width of the string.
+    if ($lcr ne 'l') {
+	print 'dup stringwidth pop ';
+	if ($lcr eq 'c') {
+	    print '-2 div';
+	} else {		# $lcr eq 'r'
+	    print 'neg';
+	}
+	print ' 0 rmoveto ';
+    }
+    print "show\n";
+}
+
+
+sub makeimagenote {
+    local($posx, $posy, $lcr, $bmt, $bbox, $image) = @_;
+    local($writing,$xpos,$ypos,@ibbox);
+
+    open(IMGFILE, '<' . $image) ||
+	die "Can't open image file \"", $image, "\"\n";	
+
+    die "Image file \"", $image, "\" does not appear to be EPSF.\n" 
+	if (<IMGFILE> !~ /^%!.*EPSF/);
+    
+    while (<IMGFILE>) {
+	if (/^%%BoundingBox\: +([0-9]+) +([0-9]+) +([0-9]+) +([0-9]+)/) {
+	    $ibbox{'left'} = $1;
+	    $ibbox{'bottom'} = $2;
+	    $ibbox{'right'} = $3;
+	    $ibbox{'top'} = $4;
+	    last;
+	}
+    }
+
+    seek(IMGFILE, 0, 0) || 
+	die "Error in seeking in EPSF file \"", $image, "\"\n";
+
+    if ($debug) {
+	print STDERR $bbox{'left'}, ' ', $bbox{'bottom'}, ' ', 
+	$bbox{'right'}, ' ', $bbox{'top'}, "\n";
+    
+	print STDERR $ibbox{'left'}, ' ', $ibbox{'bottom'}, ' ', 
+	$ibbox{'right'}, ' ', $ibbox{'top'}, "\n";
+    
+	print STDERR $posx, ' ', $posy, "\n";
+    
+	print STDERR $lcr, ' ', $bmt, "\n";
+
+    }
+
+    # print the left coordinate where the image is to be placed.
+
+    if ($lcr eq 'c') {
+	$xpos = ($bbox{'right'} + $bbox{'left'} - 
+		 $ibbox{'right'} + $ibbox{'left'}) / 2 - $ibbox{'left'};
+    } elsif ($lcr eq 'r') {
+	$xpos = $posx - $ibbox{'right'};
+    } else {			# $lcr eq 'l'
+	$xpos = $posx - $ibbox{'left'};
+    }
+
+    print $xpos, ' ';
+
+    # print the bottom coordinate where the image is to be placed.
+
+    if ($bmt eq 'c') {
+	$ypos = ($bbox{'top'} + $bbox{'bottom'} - 
+		 $ibbox{'top'} + $ibbox{'bottom'}) / 2  - $ibbox{'bottom'};
+    } elsif ($bmt eq 't') {
+	$ypos = $posy - $ibbox{'top'};
+    } else {			# $bmt eq 'b'
+	$ypos = $posy - $ibbox{'bottom'};
+    }
+
+    # translate there.
+
+    print $ypos, " translate\n";
+
+    if ($debug) {
+	print STDERR $xpos, ' ', $ypos, "\n";
+    }
+
+    # place the image.
+
+    print "/showpage{} def /erasepage{} def /copypage{} def\n";
+
+    print '%%BeginDocument ', $image, "\n";
+
+    $writing = 0;
+
+    while (<IMGFILE>) {
+	if (/^%%Trailer/) {
+	    last;
+	}
+	print if $writing && !(/^%/);
+	if (/^%%EndComment/) {
+	    $writing = 1;
+	}
+    }
+
+    print "%%EndDocument\n";
+
+}
+
+
+# Parse a position and return its value in points.
+
+sub parse_pos {
+    local($pos) = @_;
+    local($retval);
+
+    if ($pos =~ /^([0-9]*\.?[0-9]+)([a-z]+)$/) {
+	die 'Unknown unit "', $2, "\".\n" if !defined($units{$2});
+	$retval = $1 * $units{$2};
+    } elsif ($pos =~ /^([0-9]*\.?[0-9]+)$/) {
+	$retval = $1;
+    } else {
+	die 'Bad position format "', $pos, "\".\n";
+    }
+
+    $retval;
+}
+
+
+sub buildCmdList {
+
+    # Local variables describing the state for the next note.
+
+    local($lcr, $bmt, %pos, $font, $f_size, $note, $all_pages, $spacing);
+
+    # Default values for the state.
+
+    $bmt = 't';			# bottom center or top
+    $lcr = 'l';			# left or right
+    $posx = 36;			# x postion
+    $posy = 36;			# y position
+    $font = 'Courier';		# font
+    $f_size = '11';		# font size
+    $all_pages = 0;		# Print on all pages?
+    $spacing = 1.2;		# line spacing
+
+    $undo = 0;			# Undo?
+
+    $note = 'Please report this note; it is a bug.';
+				# The note to print.
+
+    # Parse the arguments.
+
+    while (@ARGV) {
+
+	# Record where we are, to avoid going into an infinite loop
+	# if we don't recognize and shift anything.
+
+	local($argsleft, $curarg) = ((0+@ARGV), $ARGV[0]);
+
+	# Global setup flags, which are allowed anywhere.
+
+	$all_pages ||= &getflag('a');
+	$all_pages = 0 + (!&getflag('t') && $all_pages);
+
+	$undo ||= &getflag('U');
+
+	# Output file.
+
+	if (($val = &getval('o')) ne '') { 
+	    open(OUTFILE, '>' . $val) || 
+		die "Can't open output file \"", $val, "\"\n";	
+	    select(OUTFILE);
+	    $output_file = $val;
+	}
+
+	# Values for notes.
+
+	if (($val = &getval('X')) ne '') { $lcr = $val; }
+	if (($val = &getval('Y')) ne '') { $bmt = $val; }
+	if (($val = &getval('x')) ne '') { $posx = parse_pos($val); }
+	if (($val = &getval('y')) ne '') { $posy = parse_pos($val); }
+	if (($val = &getval('S')) ne '') { $f_size = $val; }
+	if (($val = &getval('s')) ne '') { $spacing = $val; }
+	if (($val = &getval('F')) ne '') {
+	    if ($val =~ /([A-Za-z\-]+)([0-9]*\.?[0-9]+)/) {
+		$font = $1;
+		$f_size = $2;
+	    } elsif ($val =~ /([A-Za-z\-]+)/) {
+		$font = $1;
+	    } else {
+		die 'Bad font format "', $val, "\".\n";
+	    }
+	}
+
+	# Commands to create notes.
+
+	if (($note = &getval('n')) ne '') {
+	    push(@commands, ('string'));
+	    push(@fonts_used, $font);
+	} elsif (($note = &getval('N')) ne '') {
+	    push(@commands, ('file'));
+	    push(@fonts_used, $font);
+	} elsif (($note = &getval('E')) ne '') {
+	    push(@commands, ('epsf'));	    
+	} 
+	if ($note ne '') {
+	    push(@commands, ($bmt, $lcr, $posx, $posy, $font,
+			     $f_size, $all_pages, $spacing, $note));
+	}
+
+	# If we detect a file name, then record it.  It should be the last 
+	# argument.
+	
+	if (@ARGV == 1) {
+	    if (($ARGV[0] =~ /^-$/) || ($ARGV[0] !~ /^-/)) {
+		$infile = shift @ARGV;
+	    }
+	}
+
+	# Anything else is an error.
+
+	if (((0+@ARGV) == $argsleft) && ($curarg eq $ARGV[0])) {
+	    print STDERR "Unrecognized command line option \"";
+	    print shift @ARGV, "\"\n";
+	    die $usage;
+	}
+    }
+}
+
+
+# Examine the next flag from the command line.  We are looking for one 
+# that takes no arguments. We return true if we see it and flase if we 
+# don't.  If we saw it, then we move forward in the argument list, and 
+# do globbing correctly.
+#
+# If there are no more arguments, just return false.
+sub getflag {
+    local($flag) = @_;
+
+    local($len);
+
+    $len = length($flag)+1;
+
+    if ((@ARGV) && (($ret = (substr($ARGV[0], 0, $len) eq ('-' . $flag))))) {
+	if (length($ARGV[0]) == $len) {
+	    shift @ARGV;
+	} else {
+	    $ARGV[0] = '-' . substr($ARGV[0], $len);
+	}
+    }
+
+    $ret;
+}
+
+
+# Like getflag, but for options that have arguments.  The argument is
+# returned, or '' is returned if the option is not the next one.
+sub getval {
+    local($flag) = @_;
+    local($len,$ret);
+
+    $len = length($flag)+1;
+    $ret = '';			
+
+    if ((@ARGV) && ((substr($ARGV[0], 0, $len) eq ('-' . $flag)))) {
+	if (length($ARGV[0]) == $len) {
+	    shift @ARGV;
+	    die "No argument given for \"-", $flag, "\"\n" if !(@ARGV);
+	    $ret = shift @ARGV;
+	} else {
+	    $ret = substr(shift @ARGV, $len);
+	}
+    }
+
+    $ret;
+}
+
+
+
+## Local Variables: ***
+## mode: perl ***
+## End: ***
